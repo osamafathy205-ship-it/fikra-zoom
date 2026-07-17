@@ -1,0 +1,86 @@
+/* TitleBar Styles */
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  min-height: 38px;
+  background: rgba(6, 10, 23, 0.95);
+  border-bottom: 1px solid rgba(244, 200, 66, 0.08);
+  padding: 0 12px 0 0;
+  position: relative;
+  z-index: 1000;
+  flex-shrink: 0;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+}
+
+.titlebar-logo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold-500);
+  box-shadow: 0 0 8px rgba(244, 200, 66, 0.6);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.titlebar-name {
+  font-family: var(--font-arabic);
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  letter-spacing: 0.5px;
+}
+
+.titlebar-spacer {
+  flex: 1;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 30px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.5);
+  transition: all 150ms ease;
+}
+
+.titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.titlebar-btn-close:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* App shell layout */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}

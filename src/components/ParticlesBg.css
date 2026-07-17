@@ -1,0 +1,27 @@
+.particles-container {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.particle {
+  position: absolute;
+  border-radius: 50%;
+  animation: particle-rise linear infinite;
+}
+
+.particle-gold {
+  background: radial-gradient(circle, rgba(244, 200, 66, 0.8), rgba(244, 200, 66, 0.1));
+  box-shadow: 0 0 6px rgba(244, 200, 66, 0.4);
+}
+
+.particle-blue {
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.8), rgba(59, 130, 246, 0.1));
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+
+.particle-white {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.1));
+}

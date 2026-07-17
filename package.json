@@ -1,0 +1,99 @@
+{
+  "name": "fikra-academy",
+  "version": "1.0.0",
+  "description": "Fikra Academy - Professional Online Learning Platform",
+  "main": "electron/main.js",
+  "author": "Fikra Academy",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:server": "node server/index.js",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && electron . --enable-features=SharedArrayBuffer",
+    "dev:web": "concurrently \"npm run dev:server\" \"npm run dev:vite\"",
+    "build": "vite build && electron-builder",
+    "build:win": "vite build && electron-builder --win --x64",
+    "build:render": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "framer-motion": "^10.18.0",
+    "lucide-react": "^0.303.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.1",
+    "vite": "^5.0.8",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.fikraacademy.app",
+    "productName": "Fikra Academy",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "assets/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "protocols": [
+        {
+          "name": "Fikra Academy",
+          "schemes": ["fikra"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Fikra Academy"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png",
+      "protocols": [
+        {
+          "name": "Fikra Academy",
+          "schemes": ["fikra"]
+        }
+      ]
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  }
+}
