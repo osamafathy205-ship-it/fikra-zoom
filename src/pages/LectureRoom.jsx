@@ -2,46 +2,40 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../App.jsx'
 import { useSocket } from '../hooks/useSocket.js'
-import { useMedia } from '../hooks/useMedia.js'
+import { useLiveKit } from '../hooks/useLiveKit.js'
 import Chat from '../components/Chat.jsx'
 import ParticipantList from '../components/ParticipantList.jsx'
 import './LectureRoom.css'
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff,
   MessageSquare, Users, PhoneOff, Hand, Volume2,
-  MoreVertical, Share2
 } from 'lucide-react'
+import { Track } from 'livekit-client'
 
 // ─── Local Video Preview ───────────────────────────────────────────────────────
-function LocalVideo({ stream, name, isMuted, isVideoOff }) {
+// Uses LiveKit track.attach() to bind the video element — avoids blue screens.
+function LocalVideo({ videoTrack, name, isVideoEnabled, isAudioEnabled }) {
   const videoEl = useRef(null)
 
   useEffect(() => {
-    if (videoEl.current) {
-      videoEl.current.srcObject = stream || null
-    }
-  }, [stream])
+    const el = videoEl.current
+    if (!el || !videoTrack || !isVideoEnabled) return
+    videoTrack.attach(el)
+    return () => { try { videoTrack.detach(el) } catch (_) {} }
+  }, [videoTrack, isVideoEnabled])
 
   return (
-    <div className={`video-tile local ${isVideoOff ? 'video-off' : ''}`}>
-      {/* Always mount video element so srcObject ref is stable – avoids blue screen in Electron */}
-      {stream && (
-        <video
-          ref={videoEl}
-          autoPlay
-          muted
-          playsInline
-          className="video-el"
-          style={{ display: isVideoOff ? 'none' : 'block' }}
-        />
+    <div className={`video-tile local ${!isVideoEnabled ? 'video-off' : ''}`}>
+      {videoTrack && isVideoEnabled && (
+        <video ref={videoEl} autoPlay muted playsInline className="video-el" />
       )}
-      {(isVideoOff || !stream) && (
+      {(!isVideoEnabled || !videoTrack) && (
         <div className="video-avatar">
           <span>{name?.charAt(0)?.toUpperCase() || '؟'}</span>
         </div>
       )}
       <div className="video-label">
-        {isMuted && <MicOff size={11} className="video-muted-icon" />}
+        {!isAudioEnabled && <MicOff size={11} className="video-muted-icon" />}
         <span>{name} (أنت)</span>
       </div>
     </div>
@@ -49,36 +43,42 @@ function LocalVideo({ stream, name, isMuted, isVideoOff }) {
 }
 
 // ─── Remote Video Tile ─────────────────────────────────────────────────────────
-function RemoteVideo({ participant, stream }) {
+// Accepts LiveKit Track objects directly — no MediaStream juggling needed.
+function RemoteVideo({ participant, videoTrack, audioTrack }) {
   const videoEl = useRef(null)
+  const audioEl = useRef(null)
 
   useEffect(() => {
-    if (videoEl.current) {
-      videoEl.current.srcObject = stream || null
-    }
-  }, [stream])
+    const el = videoEl.current
+    if (!el || !videoTrack) return
+    videoTrack.attach(el)
+    return () => { try { videoTrack.detach(el) } catch (_) {} }
+  }, [videoTrack])
+
+  useEffect(() => {
+    const el = audioEl.current
+    if (!el || !audioTrack) return
+    audioTrack.attach(el)
+    return () => { try { audioTrack.detach(el) } catch (_) {} }
+  }, [audioTrack])
+
+  const isVideoOff = !videoTrack || participant.isVideoOff
+  const isMuted    = !audioTrack || participant.isMuted
 
   return (
-    <div className={`video-tile remote ${participant.isVideoOff || !stream ? 'video-off' : ''}`}>
-      {/* Always mount video tag if stream exists so remote audio keeps playing even when camera is disabled */}
-      {stream && (
-        <video
-          ref={videoEl}
-          autoPlay
-          playsInline
-          className="video-el"
-          style={{ display: participant.isVideoOff ? 'none' : 'block' }}
-        />
+    <div className={`video-tile remote ${isVideoOff ? 'video-off' : ''}`}>
+      {!isVideoOff && (
+        <video ref={videoEl} autoPlay playsInline className="video-el" />
       )}
-
-      {(participant.isVideoOff || !stream) && (
+      {/* Hidden audio element always present to play remote audio */}
+      <audio ref={audioEl} autoPlay style={{ display: 'none' }} />
+      {isVideoOff && (
         <div className="video-avatar">
           <span>{participant.name?.charAt(0)?.toUpperCase() || '؟'}</span>
         </div>
       )}
-
       <div className="video-label">
-        {participant.isMuted && <MicOff size={11} className="video-muted-icon" />}
+        {isMuted && <MicOff size={11} className="video-muted-icon" />}
         <span>{participant.name}</span>
         {participant.role === 'host' && (
           <span className="video-host-badge">مضيف</span>
@@ -88,20 +88,20 @@ function RemoteVideo({ participant, stream }) {
   )
 }
 
-// ─── Screen Share Presentation Viewport ──────────────────────────────────────────
-function ScreenShareVideo({ isMe, localStream, remoteStream, presenterName }) {
+// ─── Screen Share Presentation Viewport ───────────────────────────────────────
+function ScreenShareVideo({ screenTrack, presenterName }) {
   const videoEl = useRef(null)
-  const activeStream = isMe ? localStream : remoteStream
 
   useEffect(() => {
-    if (videoEl.current) {
-      videoEl.current.srcObject = activeStream || null
-    }
-  }, [activeStream])
+    const el = videoEl.current
+    if (!el || !screenTrack) return
+    screenTrack.attach(el)
+    return () => { try { screenTrack.detach(el) } catch (_) {} }
+  }, [screenTrack])
 
   return (
     <div className="screen-share-viewport">
-      {activeStream ? (
+      {screenTrack ? (
         <video ref={videoEl} autoPlay playsInline className="screen-video-el" />
       ) : (
         <div className="screen-loading">
@@ -121,37 +121,37 @@ function ScreenShareVideo({ isMe, localStream, remoteStream, presenterName }) {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function LectureRoom() {
   const { meetingId } = useParams()
-  const navigate = useNavigate()
+  const navigate      = useNavigate()
   const { state, dispatch } = useApp()
   const { socketRef, connected, emit, on } = useSocket()
+
+  // LiveKit hook — replaces all custom WebRTC signaling
   const {
-    localStream, localStreamRef, screenStreamRef, isMuted, isVideoOff, isSharingScreen,
-    initMedia, toggleMute, toggleVideo, forceMute,
-    startScreenShare, stopScreenShare
-  } = useMedia()
+    lkConnected,
+    localVideoTrack, localAudioTrack, localScreenTrack,
+    isVideoEnabled, isAudioEnabled, isSharingScreen,
+    remoteTracks,
+    connect: lkConnect, disconnect: lkDisconnect,
+    toggleCamera, toggleMic,
+    forceMute, forceVideoOff,
+    startScreenShare, stopScreenShare,
+  } = useLiveKit()
 
-  const [handRaised, setHandRaised] = useState(false)
+  const [handRaised,       setHandRaised]       = useState(false)
   const [screenShareActive, setScreenShareActive] = useState(false)
-  const [screenSharerName, setScreenSharerName] = useState(null)
-  const [screenSharerId, setScreenSharerId] = useState(null)
-  const [participants, setParticipants] = useState(state.participants || [])
-  const [showEndConfirm, setShowEndConfirm] = useState(false)
-  const [screenSources, setScreenSources] = useState([])
-  const [showScreenModal, setShowScreenModal] = useState(false)
-
-  // WebRTC Mesh state
-  const peersRef = useRef(new Map()) // targetSocketId -> RTCPeerConnection
-  const screenSendersRef = useRef(new Map()) // targetSocketId -> RTCRtpSender (for screen tracks)
-  const [remoteStreams, setRemoteStreams] = useState(new Map()) // targetSocketId -> { camera, screen }
+  const [screenSharerName,  setScreenSharerName]  = useState(null)
+  const [screenSharerId,    setScreenSharerId]    = useState(null)
+  const [participants,     setParticipants]      = useState(state.participants || [])
+  const [showEndConfirm,   setShowEndConfirm]    = useState(false)
+  const [screenSources,    setScreenSources]     = useState([])
+  const [showScreenModal,  setShowScreenModal]   = useState(false)
+  const [mutedByHost,      setMutedByHost]       = useState(false)
+  const [videoLockedByHost, setVideoLockedByHost] = useState(false)
 
   const isHost = state.role === 'host'
 
-  const [mutedByHost, setMutedByHost] = useState(!isHost)
-  const [videoLockedByHost, setVideoLockedByHost] = useState(!isHost)
-
   // Floating notifications / Toast Alerts
   const [notifications, setNotifications] = useState([])
-
   const showNotification = useCallback((message) => {
     const id = Date.now()
     setNotifications(prev => [...prev, { id, message }])
@@ -160,12 +160,12 @@ export default function LectureRoom() {
     }, 4500)
   }, [])
 
-  // Localized audio chime synthesis using Web Audio API (cross-device compatibility)
+  // Hand-raise chime using Web Audio API
   const playHandRaiseChime = useCallback(() => {
     try {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
       const playTone = (freq, time, duration) => {
-        const osc = audioCtx.createOscillator()
+        const osc      = audioCtx.createOscillator()
         const gainNode = audioCtx.createGain()
         osc.type = 'sine'
         osc.frequency.setValueAtTime(freq, time)
@@ -178,196 +178,71 @@ export default function LectureRoom() {
         osc.stop(time + duration)
       }
       const now = audioCtx.currentTime
-      playTone(783.99, now, 0.3) // G5 chime tone
-      playTone(1046.50, now + 0.15, 0.45) // C6 chime tone
+      playTone(783.99, now, 0.3)
+      playTone(1046.50, now + 0.15, 0.45)
     } catch (err) {
-      console.warn('[WebAudio] Chime failed to play:', err)
+      console.warn('[WebAudio] Chime failed:', err)
     }
   }, [])
 
-  // Screen Wake Lock API reference
+  // Screen Wake Lock
   const wakeLockRef = useRef(null)
-
   const requestWakeLock = async () => {
     try {
       if ('wakeLock' in navigator) {
         wakeLockRef.current = await navigator.wakeLock.request('screen')
-        console.log('[WakeLock] Screen Wake Lock is active ☀️')
       }
-    } catch (err) {
-      console.warn('[WakeLock] Failed to request wake lock:', err)
-    }
+    } catch (_) {}
   }
-
   const releaseWakeLock = () => {
-    if (wakeLockRef.current) {
-      wakeLockRef.current.release().then(() => {
-        wakeLockRef.current = null
-        console.log('[WakeLock] Released screen lock 🌙')
-      })
-    }
+    wakeLockRef.current?.release().catch(() => {})
+    wakeLockRef.current = null
   }
 
-  // ── WebRTC Peer Connection Factory ─────────────────────────────────────────
-  const cleanupPeer = useCallback((socketId) => {
-    const pc = peersRef.current.get(socketId)
-    if (pc) {
-      try {
-        pc.close()
-      } catch (e) {}
-      peersRef.current.delete(socketId)
-    }
-    screenSendersRef.current.delete(socketId)
-    setRemoteStreams(prev => {
-      const next = new Map(prev)
-      next.delete(socketId)
-      return next
-    })
-  }, [])
-
-  const createPeerConnection = useCallback((targetSocketId) => {
-    if (peersRef.current.has(targetSocketId)) {
-      return peersRef.current.get(targetSocketId)
-    }
-
-    const myId = socketRef.current?.id
-    const isInitiator = myId ? (myId < targetSocketId) : false
-
-    console.log(`[WebRTC] Creating PeerConnection with ${targetSocketId}, initiator: ${isInitiator}`)
-    
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
-      ]
-    })
-
-    peersRef.current.set(targetSocketId, pc)
-
-    // Add local media stream tracks if initialized
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current)
-      })
-    }
-
-    // ICE Candidate handler
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        emit('ice-candidate', { targetSocketId, candidate: event.candidate })
-      }
-    }
-
-    // Remote stream track added
-    pc.ontrack = (event) => {
-      console.log(`[WebRTC] Received remote track from ${targetSocketId}`)
-      const stream = event.streams[0]
-      if (!stream) return
-
-      const hasAudio = stream.getAudioTracks().length > 0
-
-      setRemoteStreams(prev => {
-        const next = new Map(prev)
-        const participantStreams = next.get(targetSocketId) || { camera: null, screen: null }
-
-        // Heuristic: If it contains audio or is the first stream, classify as camera.
-        // Otherwise, classify as screen sharing feed.
-        if (hasAudio || (!hasAudio && !participantStreams.camera)) {
-          participantStreams.camera = stream
-        } else {
-          participantStreams.screen = stream
-        }
-
-        next.set(targetSocketId, participantStreams)
-        return next
-      })
-    }
-
-    // Renegotiation handler (automatic triggers for new tracks)
-    pc.onnegotiationneeded = async () => {
-      try {
-        if (isInitiator) {
-          console.log(`[WebRTC] Negotiation needed for ${targetSocketId}, creating offer`)
-          const offer = await pc.createOffer()
-          await pc.setLocalDescription(offer)
-          emit('offer', { targetSocketId, offer, meetingId })
-        } else {
-          console.log(`[WebRTC] Negotiation needed for ${targetSocketId}, requesting from initiator`)
-          emit('request-negotiation', { targetSocketId })
-        }
-      } catch (err) {
-        console.error('[WebRTC] Negotiation offer error:', err)
-      }
-    }
-
-    pc.onconnectionstatechange = () => {
-      const state = pc.connectionState
-      console.log(`[WebRTC] Peer ${targetSocketId} connectionState: ${state}`)
-      if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-        cleanupPeer(targetSocketId)
-      }
-    }
-
-    return pc
-  }, [emit, meetingId, cleanupPeer, localStreamRef])
-
-  // Sync newly activated local streams (camera toggles, lazy unmuting) with peers
+  // ── Init media for the host immediately on mount ───────────────────────────
   useEffect(() => {
-    if (!localStream) return
-    peersRef.current.forEach((pc) => {
-      localStream.getTracks().forEach(track => {
-        const senders = pc.getSenders()
-        const existingSender = senders.find(s => s.track && s.track.kind === track.kind)
-        if (existingSender) {
-          existingSender.replaceTrack(track).catch(err => {
-            console.error('[WebRTC] replaceTrack error:', err)
-          })
-        } else {
-          pc.addTrack(track, localStream)
-        }
-      })
-    })
-  }, [localStream])
-
-  // ── Init media & Wake Lock ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (isHost) {
-      initMedia(true, true)
-    } else {
-      initMedia(false, false)
-    }
-
     requestWakeLock()
-
-    // Re-lock screen awake on visibility changes (background -> foreground)
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        requestWakeLock()
-        // Force refresh room state to fix potential background desyncs
-        if (connected) {
-          emit('join-room', {
-            meetingId,
-            name: state.userName,
-            role: state.role,
-          })
-        }
-      }
+      if (document.visibilityState === 'visible') requestWakeLock()
     }
-
     document.addEventListener('visibilitychange', handleVisibility)
-
     return () => {
       releaseWakeLock()
       document.removeEventListener('visibilitychange', handleVisibility)
-      // Cleanup all connections on component unmount
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      peersRef.current.forEach((pc, sid) => cleanupPeer(sid))
+      lkDisconnect()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Join room via socket (once connected) ──────────────────────────────────
+  // ── Request LiveKit token once socket connects ────────────────────────────
+  useEffect(() => {
+    if (!connected) return
+    emit('request-lk-token', {
+      meetingId,
+      name: state.userName,
+      role: state.role,
+    })
+  }, [connected, meetingId, state.userName, state.role, emit])
+
+  // ── Handle LiveKit token arrival → connect to room ────────────────────────
+  useEffect(() => {
+    const unsub = on('lk-token', async ({ token, url }) => {
+      try {
+        const room = await lkConnect(url, token)
+        if (room && isHost) {
+          // Host publishes camera & mic by default
+          await room.localParticipant.setCameraEnabled(true)
+          await room.localParticipant.setMicrophoneEnabled(true)
+        }
+      } catch (err) {
+        console.error('[LiveKit] Connection failed:', err)
+        showNotification('❌ فشل الاتصال بخادم البث. تحقق من اتصالك بالإنترنت.')
+      }
+    })
+    return unsub
+  }, [on, lkConnect, isHost, showNotification])
+
+  // ── Join room via socket (once connected) ─────────────────────────────────
   useEffect(() => {
     if (!connected) return
     emit('join-room', {
@@ -377,55 +252,25 @@ export default function LectureRoom() {
     })
   }, [connected, meetingId, state.userName, state.role, emit])
 
-  // ── Socket listeners ────────────────────────────────────────────────────────
+  // ── Socket listeners ──────────────────────────────────────────────────────
   useEffect(() => {
     const cleanups = [
       on('room-state', (data) => {
         setParticipants(data.participants || [])
         dispatch({ type: 'ROOM_STATE', payload: data })
-
-        const myId = socketRef.current?.id
-        const me = data.participants?.find(p => p.socketId === myId)
+        const me = data.participants?.find(p => p.socketId === socketRef.current?.id)
         if (me) {
           setMutedByHost(me.isMuted)
           setVideoLockedByHost(me.isVideoLocked)
         }
-
-        // Connect with everyone currently in the room
-        data.participants.forEach(p => {
-          if (p.socketId !== myId) {
-            createPeerConnection(p.socketId)
-          }
-        })
       }),
 
-      on('participant-joined', async ({ participant, participants: ps, needOfferTo }) => {
+      on('participant-joined', ({ participants: ps }) => {
         setParticipants(ps)
-        const myId = socketRef.current?.id
-
-        if (participant && participant.socketId !== myId) {
-          // Create (or get existing) peer connection with the new joiner
-          const pc = createPeerConnection(participant.socketId)
-
-          // If server asks us to proactively offer (because we are an existing peer)
-          if (needOfferTo === participant.socketId) {
-            // Small delay to let the new joiner settle before we offer
-            setTimeout(async () => {
-              try {
-                const offer = await pc.createOffer()
-                await pc.setLocalDescription(offer)
-                emit('offer', { targetSocketId: participant.socketId, offer, meetingId })
-              } catch (err) {
-                console.error('[WebRTC] Failed to create proactive offer:', err)
-              }
-            }, 300)
-          }
-        }
       }),
 
-      on('participant-left', ({ socketId, participants: ps }) => {
+      on('participant-left', ({ participants: ps }) => {
         setParticipants(ps)
-        cleanupPeer(socketId)
       }),
 
       on('participant-updated', ({ participants: ps }) => {
@@ -434,111 +279,43 @@ export default function LectureRoom() {
         if (me) {
           setMutedByHost(me.isMuted)
           setVideoLockedByHost(me.isVideoLocked)
+          if (me.isMuted) forceMute(true)
+          if (me.isVideoLocked) forceVideoOff(true)
         }
       }),
 
-      on('all-muted', ({ participants: ps }) => {
-        setParticipants(ps)
-        if (!isHost) {
-          forceMute(true)
-          setMutedByHost(true)
-          dispatch({ type: 'SET_MUTED', muted: true })
+      on('force-muted', () => {
+        forceMute(true)
+        showNotification('🔇 تم كتم صوتك من قبل المضيف.')
+      }),
+
+      on('force-video-off', () => {
+        forceVideoOff(true)
+        showNotification('📷 تم إيقاف كاميراتك من قبل المضيف.')
+      }),
+
+      on('lecture-ended', () => {
+        showNotification('📢 انتهت المحاضرة.')
+        setTimeout(() => navigate('/'), 1500)
+      }),
+
+      on('chat-message', (msg) => {
+        dispatch({ type: 'ADD_CHAT_MESSAGE', payload: msg })
+        if (state.activePanel !== 'chat') {
+          dispatch({ type: 'INCREMENT_UNREAD' })
         }
       }),
 
-      on('force-mute', ({ muted }) => {
-        forceMute(muted)
-        setMutedByHost(muted)
-        if (muted) {
-          dispatch({ type: 'SET_MUTED', muted: true })
+      on('hand-raised', ({ name, raised }) => {
+        if (raised && isHost) {
+          playHandRaiseChime()
+          showNotification(`✋ ${name} رفع يده`)
         }
       }),
 
-      on('force-video-lock', ({ locked }) => {
-        setVideoLockedByHost(locked)
-        if (locked) {
-          if (localStreamRef.current) {
-            const videoTrack = localStreamRef.current.getVideoTracks()[0]
-            if (videoTrack) videoTrack.enabled = false
-          }
-          alert('🔒 تم قفل الكاميرا الخاصة بك بواسطة المضيف')
-        } else {
-          alert('🔓 تم السماح لك بتشغيل الكاميرا من قبل المضيف')
-        }
-      }),
-
-      // WebRTC Signal handlers
-      on('offer', async ({ fromSocketId, offer }) => {
-        try {
-          console.log(`[WebRTC] Processing offer from ${fromSocketId}`)
-          const pc = createPeerConnection(fromSocketId)
-          await pc.setRemoteDescription(new RTCSessionDescription(offer))
-          const answer = await pc.createAnswer()
-          await pc.setLocalDescription(answer)
-          emit('answer', { targetSocketId: fromSocketId, answer })
-        } catch (err) {
-          console.error('[WebRTC] Offer processing failed:', err)
-        }
-      }),
-
-      on('answer', async ({ fromSocketId, answer }) => {
-        try {
-          console.log(`[WebRTC] Processing answer from ${fromSocketId}`)
-          const pc = peersRef.current.get(fromSocketId)
-          if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer))
-          }
-        } catch (err) {
-          console.error('[WebRTC] Answer processing failed:', err)
-        }
-      }),
-
-      on('ice-candidate', async ({ fromSocketId, candidate }) => {
-        try {
-          const pc = peersRef.current.get(fromSocketId)
-          if (pc && candidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate))
-          }
-        } catch (err) {
-          console.error('[WebRTC] ICE candidate error:', err)
-        }
-      }),
-
-      on('request-negotiation', async ({ fromSocketId }) => {
-        try {
-          console.log(`[WebRTC] Received negotiation request from ${fromSocketId}`)
-          const pc = peersRef.current.get(fromSocketId)
-          if (pc) {
-            const offer = await pc.createOffer()
-            await pc.setLocalDescription(offer)
-            emit('offer', { targetSocketId: fromSocketId, offer, meetingId })
-          }
-        } catch (err) {
-          console.error('[WebRTC] Failed to create offer on request:', err)
-        }
-      }),
-
-      // Background message sync (stays active even when Chat panel is closed)
-      on('new-message', (msg) => {
-        dispatch({ type: 'NEW_MESSAGE', message: msg })
-      }),
-
-      on('kicked', ({ reason }) => {
-        alert(reason || 'تم إزالتك من المحاضرة')
-        navigate('/')
-      }),
-
-      on('host-left', () => {
-        alert('انتهت المحاضرة — غادر المضيف')
-        navigate('/')
-      }),
-
-      on('lecture-ended', () => navigate('/')),
-
-      on('screen-share-started', ({ socketId }) => {
-        const p = participants.find(p => p.socketId === socketId)
-        setScreenSharerName(p?.name || 'المحاضر')
-        setScreenSharerId(socketId)
+      on('screen-share-started', ({ sharerName, sharerId }) => {
+        setScreenSharerName(sharerName)
+        setScreenSharerId(sharerId)
         setScreenShareActive(true)
       }),
 
@@ -548,144 +325,53 @@ export default function LectureRoom() {
         setScreenSharerId(null)
       }),
 
-      on('hand-raised', ({ name, raised }) => {
-        if (raised) {
-          console.log(`${name} رفع يده ✋`)
-          showNotification(`✋ ${name} قام برفع يده`)
-          if (isHost) {
-            playHandRaiseChime()
-          }
+      on('mute-all', () => {
+        if (!isHost) {
+          forceMute(true)
+          showNotification('🔇 قام المضيف بكتم صوت الجميع.')
         }
       }),
     ]
+
     return () => cleanups.forEach(fn => fn?.())
-  }, [on, dispatch, navigate, forceMute, participants, isHost, localStreamRef, cleanupPeer, createPeerConnection, socketRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, socketRef, isHost, navigate, dispatch])
 
-  // Helper to handle screen share track endings (e.g. browser bar "stop sharing" click)
-  const handleStopScreenShareFromTrack = useCallback(() => {
-    peersRef.current.forEach((pc, targetSocketId) => {
-      const sender = screenSendersRef.current.get(targetSocketId)
-      if (sender) {
-        try {
-          pc.removeTrack(sender)
-        } catch (e) {}
-        screenSendersRef.current.delete(targetSocketId)
-      }
-    })
-    emit('screen-share-ended', { meetingId })
-    setScreenShareActive(false)
-    setScreenSharerName(null)
-    setScreenSharerId(null)
-  }, [emit, meetingId])
-
-  // ── Controls ────────────────────────────────────────────────────────────────
+  // ── Controls ──────────────────────────────────────────────────────────────
   const handleToggleMute = async () => {
     if (!isHost && mutedByHost) {
       alert('🔇 تم كتم صوتك من قبل المضيف. يرجى الانتظار حتى يسمح لك بالتحدث.')
       return
     }
-    
-    if (!localStream) {
-      // First time unmuting – init audio-only stream and register on all peers
-      const stream = await initMedia(false, true)
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          peersRef.current.forEach((pc) => {
-            const alreadyExists = pc.getSenders().find(s => s.track?.kind === track.kind)
-            if (!alreadyExists) {
-              pc.addTrack(track, stream)
-            }
-          })
-        })
-        emit('toggle-mute', { meetingId, isMuted: false })
-        dispatch({ type: 'SET_MUTED', muted: false })
-      }
-    } else {
-      const newMuted = toggleMute()
-      emit('toggle-mute', { meetingId, isMuted: newMuted })
-      dispatch({ type: 'SET_MUTED', muted: newMuted })
-    }
+    const newMuted = !(await toggleMic())
+    emit('toggle-mute', { meetingId, isMuted: newMuted })
   }
 
   const handleToggleVideo = async () => {
     if (!isHost && videoLockedByHost) {
-      alert('📷 الكاميرا مغلقة من قبل المضيف. يرجى الانتظار حتى يسمح لك بتشغيلها.')
+      alert('📷 الكاميرا مغلقة من قبل المضيف.')
       return
     }
-
-    if (!localStream) {
-      // First time activating camera – init media and add tracks to all existing peers
-      const stream = await initMedia(true, !isMuted)
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          peersRef.current.forEach((pc) => {
-            const alreadyExists = pc.getSenders().find(s => s.track?.kind === track.kind)
-            if (!alreadyExists) {
-              pc.addTrack(track, stream)
-            }
-          })
-        })
-        emit('toggle-video', { meetingId, isVideoOff: false })
-      }
-    } else {
-      // Stream exists – just enable/disable the video track (no remount, no blue screen)
-      const newOff = toggleVideo()
-      emit('toggle-video', { meetingId, isVideoOff: newOff })
-    }
-  }
-
-  const selectScreenSource = async (sourceId) => {
-    setShowScreenModal(false)
-    const stream = await startScreenShare(sourceId)
-    if (stream) {
-      const screenTrack = stream.getVideoTracks()[0]
-      peersRef.current.forEach((pc, targetSocketId) => {
-        const sender = pc.addTrack(screenTrack, stream)
-        screenSendersRef.current.set(targetSocketId, sender)
-      })
-
-      screenTrack.addEventListener('ended', () => {
-        handleStopScreenShareFromTrack()
-      })
-
-      emit('screen-share-started', { meetingId })
-      setScreenSharerName(state.userName)
-      setScreenSharerId(state.mySocketId)
-      setScreenShareActive(true)
-    }
+    const newOff = !(await toggleCamera())
+    emit('toggle-video', { meetingId, isVideoOff: newOff })
   }
 
   const handleScreenShare = async () => {
     if (isSharingScreen) {
-      stopScreenShare()
-      handleStopScreenShareFromTrack()
+      await stopScreenShare()
+      emit('screen-share-ended', { meetingId })
+      setScreenShareActive(false)
+      setScreenSharerName(null)
+      setScreenSharerId(null)
     } else {
-      if (window.fikraElectron) {
-        try {
-          const sources = await window.fikraElectron.screen.getSources()
-          setScreenSources(sources)
-          setShowScreenModal(true)
-        } catch (err) {
-          console.error('[ScreenShare] Failed to fetch sources:', err)
-        }
-      } else {
-        const stream = await startScreenShare()
-        if (stream) {
-          const screenTrack = stream.getVideoTracks()[0]
-          peersRef.current.forEach((pc, targetSocketId) => {
-            const sender = pc.addTrack(screenTrack, stream)
-            screenSendersRef.current.set(targetSocketId, sender)
-          })
-
-          screenTrack.addEventListener('ended', () => {
-            handleStopScreenShareFromTrack()
-          })
-
-          emit('screen-share-started', { meetingId })
-          setScreenSharerName(state.userName)
-          setScreenSharerId(state.mySocketId)
-          setScreenShareActive(true)
-        }
+      try {
+        await startScreenShare()
+        emit('screen-share-started', { meetingId, sharerName: state.userName, sharerId: state.mySocketId })
+        setScreenSharerName(state.userName)
+        setScreenSharerId(state.mySocketId)
+        setScreenShareActive(true)
+      } catch (err) {
+        console.error('[ScreenShare]', err)
       }
     }
   }
@@ -697,11 +383,8 @@ export default function LectureRoom() {
   }
 
   const handleLeave = () => {
-    if (isHost) {
-      setShowEndConfirm(true)
-    } else {
-      navigate('/')
-    }
+    if (isHost) setShowEndConfirm(true)
+    else navigate('/')
   }
 
   const handleEndLecture = () => {
@@ -709,7 +392,15 @@ export default function LectureRoom() {
     navigate('/')
   }
 
-  const myInfo = participants.find(p => p.socketId === state.mySocketId) || {}
+  // ── Helpers to find the correct remote tracks by socket ID ────────────────
+  const getRemoteTracks = (socketId) => remoteTracks.get(socketId) || {}
+
+  // Find active screen track from any remote participant
+  const activeScreenTrack = (() => {
+    if (!screenShareActive || !screenSharerId) return null
+    if (screenSharerId === state.mySocketId) return localScreenTrack
+    return getRemoteTracks(screenSharerId)?.screen || null
+  })()
 
   return (
     <div className="lr-root">
@@ -771,9 +462,7 @@ export default function LectureRoom() {
         <div className={`lr-center-stage ${screenShareActive ? 'with-screen' : ''}`}>
           {screenShareActive ? (
             <ScreenShareVideo
-              isMe={screenSharerId === state.mySocketId}
-              localStream={screenStreamRef.current}
-              remoteStream={remoteStreams.get(screenSharerId)?.screen}
+              screenTrack={activeScreenTrack}
               presenterName={screenSharerName}
             />
           ) : (
@@ -782,21 +471,23 @@ export default function LectureRoom() {
               <div className="pinned-host-container">
                 {isHost ? (
                   <LocalVideo
-                    stream={localStream}
+                    videoTrack={localVideoTrack}
                     name={state.userName}
-                    isMuted={isMuted}
-                    isVideoOff={isVideoOff}
-                    isPinned={true}
+                    isVideoEnabled={isVideoEnabled}
+                    isAudioEnabled={isAudioEnabled}
                   />
                 ) : (
-                  participants.filter(p => p.role === 'host').map(p => (
-                    <RemoteVideo
-                      key={p.socketId}
-                      participant={p}
-                      stream={remoteStreams.get(p.socketId)?.camera}
-                      isPinned={true}
-                    />
-                  ))
+                  participants.filter(p => p.role === 'host').map(p => {
+                    const rt = getRemoteTracks(p.socketId)
+                    return (
+                      <RemoteVideo
+                        key={p.socketId}
+                        participant={p}
+                        videoTrack={rt.video}
+                        audioTrack={rt.audio}
+                      />
+                    )
+                  })
                 )}
               </div>
             ) : (
@@ -814,46 +505,54 @@ export default function LectureRoom() {
         {/* Dynamic Video Strip Wrap */}
         <div className={`lr-strip-wrap ${state.activePanel ? 'panel-open' : ''} ${screenShareActive ? 'with-screen' : ''}`}>
           <div className={`lr-video-strip ${screenShareActive ? 'strip-layout' : 'grid-layout'}`}>
-            {/* If screen sharing is active, host's camera feed sits inside the strip alongside students */}
+            {/* If screen sharing is active, host's camera feed sits in the strip */}
             {screenShareActive && (
               isHost ? (
                 <LocalVideo
-                  stream={localStream}
+                  videoTrack={localVideoTrack}
                   name={state.userName}
-                  isMuted={isMuted}
-                  isVideoOff={isVideoOff}
+                  isVideoEnabled={isVideoEnabled}
+                  isAudioEnabled={isAudioEnabled}
                 />
               ) : (
-                participants.filter(p => p.role === 'host').map(p => (
-                  <RemoteVideo
-                    key={p.socketId}
-                    participant={p}
-                    stream={remoteStreams.get(p.socketId)?.camera}
-                  />
-                ))
+                participants.filter(p => p.role === 'host').map(p => {
+                  const rt = getRemoteTracks(p.socketId)
+                  return (
+                    <RemoteVideo
+                      key={p.socketId}
+                      participant={p}
+                      videoTrack={rt.video}
+                      audioTrack={rt.audio}
+                    />
+                  )
+                })
               )
             )}
 
             {/* Local student camera preview */}
             {!isHost && (
               <LocalVideo
-                stream={localStream}
+                videoTrack={localVideoTrack}
                 name={state.userName}
-                isMuted={isMuted}
-                isVideoOff={isVideoOff}
+                isVideoEnabled={isVideoEnabled}
+                isAudioEnabled={isAudioEnabled}
               />
             )}
 
             {/* Remote student camera previews */}
             {participants
               .filter(p => p.role === 'student' && p.socketId !== state.mySocketId)
-              .map(p => (
-                <RemoteVideo
-                  key={p.socketId}
-                  participant={p}
-                  stream={remoteStreams.get(p.socketId)?.camera}
-                />
-              ))
+              .map(p => {
+                const rt = getRemoteTracks(p.socketId)
+                return (
+                  <RemoteVideo
+                    key={p.socketId}
+                    participant={p}
+                    videoTrack={rt.video}
+                    audioTrack={rt.audio}
+                  />
+                )
+              })
             }
           </div>
         </div>
@@ -889,23 +588,23 @@ export default function LectureRoom() {
         {/* Mute */}
         <button
           id="btn-toggle-mute"
-          className={`ctrl-btn ${isMuted ? 'ctrl-btn-danger' : 'ctrl-btn-default'}`}
+          className={`ctrl-btn ${!isAudioEnabled ? 'ctrl-btn-danger' : 'ctrl-btn-default'}`}
           onClick={handleToggleMute}
-          title={isMuted ? 'تشغيل الميكروفون' : 'كتم الميكروفون'}
+          title={!isAudioEnabled ? 'تشغيل الميكروفون' : 'كتم الميكروفون'}
         >
-          {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
-          <span>{isMuted ? 'كتم' : 'ميكروفون'}</span>
+          {!isAudioEnabled ? <MicOff size={20} /> : <Mic size={20} />}
+          <span>{!isAudioEnabled ? 'كتم' : 'ميكروفون'}</span>
         </button>
 
         {/* Video */}
         <button
           id="btn-toggle-video"
-          className={`ctrl-btn ${isVideoOff ? 'ctrl-btn-danger' : 'ctrl-btn-default'}`}
+          className={`ctrl-btn ${!isVideoEnabled ? 'ctrl-btn-danger' : 'ctrl-btn-default'}`}
           onClick={handleToggleVideo}
-          title={isVideoOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'}
+          title={!isVideoEnabled ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'}
         >
-          {isVideoOff ? <VideoOff size={20} /> : <Video size={20} />}
-          <span>{isVideoOff ? 'كاميرا' : 'كاميرا'}</span>
+          {!isVideoEnabled ? <VideoOff size={20} /> : <Video size={20} />}
+          <span>كاميرا</span>
         </button>
 
         {/* Screen Share */}
@@ -971,34 +670,6 @@ export default function LectureRoom() {
                 إلغاء
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Screen Source Picker (Electron) ──────────────────────── */}
-      {showScreenModal && (
-        <div className="lr-overlay">
-          <div className="lr-confirm-card glass-card" style={{ maxWidth: '600px', width: '90%' }}>
-            <h3 style={{ marginBottom: '16px' }}>اختر شاشة للمشاركة</h3>
-            <div className="screen-sources-grid">
-              {screenSources.map(src => (
-                <button
-                  key={src.id}
-                  className="screen-source-btn"
-                  onClick={() => selectScreenSource(src.id)}
-                >
-                  <img src={src.thumbnail} alt={src.name} className="screen-source-thumb" />
-                  <span className="screen-source-name">{src.name}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              className="btn btn-ghost"
-              style={{ marginTop: '16px' }}
-              onClick={() => setShowScreenModal(false)}
-            >
-              إلغاء
-            </button>
           </div>
         </div>
       )}

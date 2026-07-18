@@ -9,6 +9,12 @@ const { Server } = require('socket.io')
 const cors = require('cors')
 const crypto = require('crypto')
 const path = require('path')
+const { AccessToken } = require('livekit-server-sdk')
+
+// ─── LiveKit Credentials ──────────────────────────────────────────────────────
+const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'APICjSNbeU4FrNe'
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'Mrsu9k1Zvv7lexPWLMEvAm53NBkGaIYiz53T3Rn4eQk'
+const LIVEKIT_URL = process.env.LIVEKIT_URL || 'wss://fikra-zoom-2kyh9e7o.livekit.cloud'
 
 const app = express()
 const server = http.createServer(app)
@@ -86,6 +92,31 @@ io.on('connection', (socket) => {
 
   let currentRoom = null
   let currentRole = null
+
+  // ── LIVEKIT TOKEN GENERATION ───────────────────────────────────────────────
+  socket.on('request-lk-token', async ({ meetingId, name, role }) => {
+    try {
+      const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+        identity: socket.id,      // Use socket ID as unique identity
+        name: name,
+        ttl: '4h',
+      })
+      at.addGrant({
+        roomJoin: true,
+        room: meetingId,
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: true,
+        roomAdmin: role === 'host',
+      })
+      const token = await at.toJwt()
+      socket.emit('lk-token', { token, url: LIVEKIT_URL })
+      console.log(`[LiveKit] Token issued for ${name} (${role}) in room ${meetingId}`)
+    } catch (err) {
+      console.error('[LiveKit] Token generation failed:', err)
+      socket.emit('lk-token-error', { message: err.message })
+    }
+  })
 
   // ── JOIN ROOM ──────────────────────────────────────────────────────────────
   socket.on('join-room', ({ meetingId, name, role, avatar }) => {
