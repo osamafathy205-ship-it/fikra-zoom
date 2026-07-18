@@ -132,6 +132,42 @@ export default function LectureRoom() {
   const [mutedByHost, setMutedByHost] = useState(!isHost)
   const [videoLockedByHost, setVideoLockedByHost] = useState(!isHost)
 
+  // Floating notifications / Toast Alerts
+  const [notifications, setNotifications] = useState([])
+
+  const showNotification = useCallback((message) => {
+    const id = Date.now()
+    setNotifications(prev => [...prev, { id, message }])
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id))
+    }, 4500)
+  }, [])
+
+  // Localized audio chime synthesis using Web Audio API (cross-device compatibility)
+  const playHandRaiseChime = useCallback(() => {
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+      const playTone = (freq, time, duration) => {
+        const osc = audioCtx.createOscillator()
+        const gainNode = audioCtx.createGain()
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(freq, time)
+        gainNode.gain.setValueAtTime(0, time)
+        gainNode.gain.linearRampToValueAtTime(0.2, time + 0.05)
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, time + duration)
+        osc.connect(gainNode)
+        gainNode.connect(audioCtx.destination)
+        osc.start(time)
+        osc.stop(time + duration)
+      }
+      const now = audioCtx.currentTime
+      playTone(783.99, now, 0.3) // G5 chime tone
+      playTone(1046.50, now + 0.15, 0.45) // C6 chime tone
+    } catch (err) {
+      console.warn('[WebAudio] Chime failed to play:', err)
+    }
+  }, [])
+
   // Screen Wake Lock API reference
   const wakeLockRef = useRef(null)
 
@@ -172,10 +208,13 @@ export default function LectureRoom() {
     })
   }, [])
 
-  const createPeerConnection = useCallback((targetSocketId, isInitiator) => {
+  const createPeerConnection = useCallback((targetSocketId) => {
     if (peersRef.current.has(targetSocketId)) {
       return peersRef.current.get(targetSocketId)
     }
+
+    const myId = socketRef.current?.id
+    const isInitiator = myId ? (myId < targetSocketId) : false
 
     console.log(`[WebRTC] Creating PeerConnection with ${targetSocketId}, initiator: ${isInitiator}`)
     
@@ -236,6 +275,9 @@ export default function LectureRoom() {
           const offer = await pc.createOffer()
           await pc.setLocalDescription(offer)
           emit('offer', { targetSocketId, offer, meetingId })
+        } else {
+          console.log(`[WebRTC] Negotiation needed for ${targetSocketId}, requesting from initiator`)
+          emit('request-negotiation', { targetSocketId })
         }
       } catch (err) {
         console.error('[WebRTC] Negotiation offer error:', err)
@@ -335,16 +377,16 @@ export default function LectureRoom() {
         // Connect with everyone currently in the room
         data.participants.forEach(p => {
           if (p.socketId !== myId) {
-            createPeerConnection(p.socketId, true)
+            createPeerConnection(p.socketId)
           }
         })
       }),
 
       on('participant-joined', ({ participant, participants: ps }) => {
         setParticipants(ps)
-        // Existing participants initiate WebRTC with the newly joined one
+        // Existing participants create and manage connection with new joiner
         if (participant && participant.socketId !== socketRef.current?.id) {
-          createPeerConnection(participant.socketId, true)
+          createPeerConnection(participant.socketId)
         }
       }),
 
@@ -396,7 +438,7 @@ export default function LectureRoom() {
       on('offer', async ({ fromSocketId, offer }) => {
         try {
           console.log(`[WebRTC] Processing offer from ${fromSocketId}`)
-          const pc = createPeerConnection(fromSocketId, false)
+          const pc = createPeerConnection(fromSocketId)
           await pc.setRemoteDescription(new RTCSessionDescription(offer))
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
@@ -426,6 +468,20 @@ export default function LectureRoom() {
           }
         } catch (err) {
           console.error('[WebRTC] ICE candidate error:', err)
+        }
+      }),
+
+      on('request-negotiation', async ({ fromSocketId }) => {
+        try {
+          console.log(`[WebRTC] Received negotiation request from ${fromSocketId}`)
+          const pc = peersRef.current.get(fromSocketId)
+          if (pc) {
+            const offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+            emit('offer', { targetSocketId: fromSocketId, offer, meetingId })
+          }
+        } catch (err) {
+          console.error('[WebRTC] Failed to create offer on request:', err)
         }
       }),
 
@@ -460,7 +516,13 @@ export default function LectureRoom() {
       }),
 
       on('hand-raised', ({ name, raised }) => {
-        if (raised) console.log(`${name} رفع يده ✋`)
+        if (raised) {
+          console.log(`${name} رفع يده ✋`)
+          showNotification(`✋ ${name} قام برفع يده`)
+          if (isHost) {
+            playHandRaiseChime()
+          }
+        }
       }),
     ]
     return () => cleanups.forEach(fn => fn?.())
@@ -642,31 +704,97 @@ export default function LectureRoom() {
         </div>
       </header>
 
+      {/* ── Toast Notifications ────────────────────────────────────── */}
+      <div className="lr-notifications">
+        {notifications.map(n => (
+          <div key={n.id} className="lr-toast glass-card">
+            <span>{n.message}</span>
+          </div>
+        ))}
+      </div>
+
       {/* ── Main Area ─────────────────────────────────────────────── */}
       <div className="lr-main">
-        {/* Screen Share Viewport */}
-        {screenShareActive && (
-          <div className="lr-screen-viewport">
+        {/* Main Center Stage: Screen Share OR Pinned Host */}
+        <div className={`lr-center-stage ${screenShareActive ? 'with-screen' : ''}`}>
+          {screenShareActive ? (
             <ScreenShareVideo
               isMe={screenSharerId === state.mySocketId}
               localStream={screenStreamRef.current}
               remoteStream={remoteStreams.get(screenSharerId)?.screen}
               presenterName={screenSharerName}
             />
-          </div>
-        )}
+          ) : (
+            // Pinned Host Viewport
+            (isHost || participants.some(p => p.role === 'host')) ? (
+              <div className="pinned-host-container">
+                {isHost ? (
+                  <LocalVideo
+                    stream={localStream}
+                    name={state.userName}
+                    isMuted={isMuted}
+                    isVideoOff={isVideoOff}
+                    isPinned={true}
+                  />
+                ) : (
+                  participants.filter(p => p.role === 'host').map(p => (
+                    <RemoteVideo
+                      key={p.socketId}
+                      participant={p}
+                      stream={remoteStreams.get(p.socketId)?.camera}
+                      isPinned={true}
+                    />
+                  ))
+                )}
+              </div>
+            ) : (
+              // Fallback if no host joined yet
+              <div className="pinned-host-container waiting">
+                <div className="waiting-host-box">
+                  <div className="spinner"></div>
+                  <p>بانتظار بدء المحاضرة من قبل المعلم...</p>
+                </div>
+              </div>
+            )
+          )}
+        </div>
 
-        {/* Video Grid */}
-        <div className={`lr-grid-wrap ${state.activePanel ? 'panel-open' : ''} ${screenShareActive ? 'with-screen' : ''}`}>
-          <div className={`lr-video-grid ${screenShareActive ? 'lr-grid-strip' : `lr-grid-${Math.min(participants.length, 6)}`}`}>
-            <LocalVideo
-              stream={localStream}
-              name={state.userName}
-              isMuted={isMuted}
-              isVideoOff={isVideoOff}
-            />
+        {/* Dynamic Video Strip Wrap */}
+        <div className={`lr-strip-wrap ${state.activePanel ? 'panel-open' : ''} ${screenShareActive ? 'with-screen' : ''}`}>
+          <div className={`lr-video-strip ${screenShareActive ? 'strip-layout' : 'grid-layout'}`}>
+            {/* If screen sharing is active, host's camera feed sits inside the strip alongside students */}
+            {screenShareActive && (
+              isHost ? (
+                <LocalVideo
+                  stream={localStream}
+                  name={state.userName}
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                />
+              ) : (
+                participants.filter(p => p.role === 'host').map(p => (
+                  <RemoteVideo
+                    key={p.socketId}
+                    participant={p}
+                    stream={remoteStreams.get(p.socketId)?.camera}
+                  />
+                ))
+              )
+            )}
+
+            {/* Local student camera preview */}
+            {!isHost && (
+              <LocalVideo
+                stream={localStream}
+                name={state.userName}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+              />
+            )}
+
+            {/* Remote student camera previews */}
             {participants
-              .filter(p => p.socketId !== state.mySocketId)
+              .filter(p => p.role === 'student' && p.socketId !== state.mySocketId)
               .map(p => (
                 <RemoteVideo
                   key={p.socketId}

@@ -350,6 +350,12 @@ io.on('connection', (socket) => {
     })
   })
 
+  socket.on('request-negotiation', ({ targetSocketId }) => {
+    io.to(targetSocketId).emit('request-negotiation', {
+      fromSocketId: socket.id,
+    })
+  })
+
   // ── RAISE HAND ─────────────────────────────────────────────────────────────
   socket.on('raise-hand', ({ meetingId, raised }) => {
     const room = rooms.get(meetingId)
