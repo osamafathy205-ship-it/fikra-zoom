@@ -9,6 +9,10 @@ export default function ParticipantList({ participants, mySocketId, isHost, meet
     emit('mute-user', { meetingId, targetSocketId: p.socketId, muted: !p.isMuted })
   }
 
+  const handleToggleVideoLock = (p) => {
+    emit('lock-user-video', { meetingId, targetSocketId: p.socketId, locked: !p.isVideoLocked })
+  }
+
   const handleKick = (p) => {
     setConfirmKick(p)
   }
@@ -45,10 +49,17 @@ export default function ParticipantList({ participants, mySocketId, isHost, meet
             {isMe && <span className="pl-you-tag">(أنت)</span>}
             {isParticipantHost && <span className="pl-host-tag">مضيف</span>}
           </div>
-          <div className="pl-status">
+          <div className="pl-status" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {p.isMuted
-              ? <span className="pl-status-muted"><MicOff size={10} /> مكتوم</span>
-              : <span className="pl-status-active"><Mic size={10} /> نشط</span>
+              ? <span className="pl-status-muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}><MicOff size={10} /> مكتوم</span>
+              : <span className="pl-status-active" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}><Mic size={10} /> نشط</span>
+            }
+            {p.isVideoLocked
+              ? <span className="pl-status-muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', color: '#ef4444' }}><VideoOff size={10} /> مقفل</span>
+              : (p.isVideoOff 
+                  ? <span className="pl-status-muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}><VideoOff size={10} /> مغلق</span>
+                  : <span className="pl-status-active" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', color: '#22c55e' }}><Video size={10} /> مفتوح</span>
+                )
             }
           </div>
         </div>
@@ -59,9 +70,16 @@ export default function ParticipantList({ participants, mySocketId, isHost, meet
             <button
               className={`pl-ctrl-btn ${p.isMuted ? 'muted' : 'unmuted'}`}
               onClick={() => handleMute(p)}
-              title={p.isMuted ? 'إلغاء الكتم' : 'كتم'}
+              title={p.isMuted ? 'إلغاء الكتم والسماح بالكلام' : 'كتم الصوت'}
             >
               {p.isMuted ? <Mic size={13} /> : <MicOff size={13} />}
+            </button>
+            <button
+              className={`pl-ctrl-btn ${p.isVideoLocked ? 'muted' : 'unmuted'}`}
+              onClick={() => handleToggleVideoLock(p)}
+              title={p.isVideoLocked ? 'السماح بتشغيل الكاميرا' : 'قفل الكاميرا'}
+            >
+              {p.isVideoLocked ? <Video size={13} /> : <VideoOff size={13} />}
             </button>
             <button
               className="pl-ctrl-btn kick"

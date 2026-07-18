@@ -82,10 +82,18 @@ export default function LectureRoom() {
 
   const isHost = state.role === 'host'
 
+  const [mutedByHost, setMutedByHost] = useState(!isHost)
+  const [videoLockedByHost, setVideoLockedByHost] = useState(!isHost)
+
   // ── Init media on mount ────────────────────────────────────────────────────
   useEffect(() => {
-    initMedia(true, true)
-  }, [])
+    if (isHost) {
+      initMedia(true, true)
+    } else {
+      // Students join with both audio and video disabled by default (no browser prompt)
+      initMedia(false, false)
+    }
+  }, [isHost])
 
   // ── Join room via socket ────────────────────────────────────────────────────
   useEffect(() => {
@@ -103,15 +111,51 @@ export default function LectureRoom() {
       on('room-state', (data) => {
         setParticipants(data.participants || [])
         dispatch({ type: 'ROOM_STATE', payload: data })
+        // Set lock state based on user's participant info on join
+        const me = data.participants?.find(p => p.socketId === socketRef.current?.id)
+        if (me) {
+          setMutedByHost(me.isMuted)
+          setVideoLockedByHost(me.isVideoLocked)
+        }
       }),
       on('participant-joined', ({ participants: ps }) => setParticipants(ps)),
       on('participant-left', ({ participants: ps }) => setParticipants(ps)),
-      on('participant-updated', ({ participants: ps }) => setParticipants(ps)),
+      on('participant-updated', ({ participants: ps }) => {
+        setParticipants(ps)
+        // Also update local lock states if host changes them for me
+        const me = ps.find(p => p.socketId === socketRef?.current?.id)
+        if (me) {
+          setMutedByHost(me.isMuted)
+          setVideoLockedByHost(me.isVideoLocked)
+        }
+      }),
       on('all-muted', ({ participants: ps }) => {
         setParticipants(ps)
-        if (state.role !== 'host') forceMute(true)
+        if (!isHost) {
+          forceMute(true)
+          setMutedByHost(true)
+          dispatch({ type: 'SET_MUTED', muted: true })
+        }
       }),
-      on('force-mute', ({ muted }) => forceMute(muted)),
+      on('force-mute', ({ muted }) => {
+        forceMute(muted)
+        setMutedByHost(muted)
+        if (muted) {
+          dispatch({ type: 'SET_MUTED', muted: true })
+        }
+      }),
+      on('force-video-lock', ({ locked }) => {
+        setVideoLockedByHost(locked)
+        if (locked) {
+          if (localStreamRef.current) {
+            const videoTrack = localStreamRef.current.getVideoTracks()[0]
+            if (videoTrack) videoTrack.enabled = false
+          }
+          alert('🔒 تم قفل الكاميرا الخاصة بك بواسطة المضيف')
+        } else {
+          alert('🔓 تم السماح لك بتشغيل الكاميرا من قبل المضيف')
+        }
+      }),
       on('kicked', ({ reason }) => {
         alert(reason || 'تم إزالتك من المحاضرة')
         navigate('/')
@@ -135,18 +179,45 @@ export default function LectureRoom() {
       }),
     ]
     return () => cleanups.forEach(fn => fn?.())
-  }, [on, dispatch, navigate, forceMute, participants, state.role])
+  }, [on, dispatch, navigate, forceMute, participants, state.role, isHost, localStreamRef])
 
   // ── Controls ────────────────────────────────────────────────────────────────
-  const handleToggleMute = () => {
-    const newMuted = toggleMute()
-    emit('toggle-mute', { meetingId, isMuted: newMuted })
-    dispatch({ type: 'SET_MUTED', muted: newMuted })
+  const handleToggleMute = async () => {
+    if (!isHost && mutedByHost) {
+      alert('🔇 تم كتم صوتك من قبل المضيف. يرجى الانتظار حتى يسمح لك بالتحدث.')
+      return
+    }
+    
+    if (!localStream) {
+      // Lazy load userMedia only when student unmutes (requires permission first time)
+      const stream = await initMedia(false, true)
+      if (stream) {
+        emit('toggle-mute', { meetingId, isMuted: false })
+        dispatch({ type: 'SET_MUTED', muted: false })
+      }
+    } else {
+      const newMuted = toggleMute()
+      emit('toggle-mute', { meetingId, isMuted: newMuted })
+      dispatch({ type: 'SET_MUTED', muted: newMuted })
+    }
   }
 
-  const handleToggleVideo = () => {
-    const newOff = toggleVideo()
-    emit('toggle-video', { meetingId, isVideoOff: newOff })
+  const handleToggleVideo = async () => {
+    if (!isHost && videoLockedByHost) {
+      alert('📷 الكاميرا مغلقة من قبل المضيف. يرجى الانتظار حتى يسمح لك بتشغيلها.')
+      return
+    }
+
+    if (!localStream) {
+      // Lazy load video stream only when student toggles camera on
+      const stream = await initMedia(true, isMuted)
+      if (stream) {
+        emit('toggle-video', { meetingId, isVideoOff: false })
+      }
+    } else {
+      const newOff = toggleVideo()
+      emit('toggle-video', { meetingId, isVideoOff: newOff })
+    }
   }
 
   const selectScreenSource = async (sourceId) => {

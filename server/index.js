@@ -98,7 +98,8 @@ io.on('connection', (socket) => {
       name: name || `مستخدم ${socket.id.slice(0, 4)}`,
       role: role || 'student',
       isMuted: role !== 'host',
-      isVideoOff: false,
+      isVideoOff: role !== 'host',
+      isVideoLocked: role !== 'host',
       joinedAt: Date.now(),
       avatar: avatar || null,
       meetingId,
@@ -180,6 +181,32 @@ io.on('connection', (socket) => {
     })
 
     console.log(`[Room ${meetingId}] Host ${muted ? 'muted' : 'unmuted'} ${targetSocketId}`)
+  })
+
+  // ── LOCK USER VIDEO (Host Only) ──────────────────────────────────────────────
+  socket.on('lock-user-video', ({ meetingId, targetSocketId, locked }) => {
+    const room = rooms.get(meetingId)
+    if (!room || room.hostSocketId !== socket.id) return
+
+    const target = room.participants.get(targetSocketId)
+    if (target) {
+      target.isVideoLocked = locked
+      if (locked) {
+        target.isVideoOff = true
+      }
+    }
+
+    // Tell the target to lock/unlock video
+    io.to(targetSocketId).emit('force-video-lock', { locked })
+
+    // Update everyone
+    io.to(meetingId).emit('participant-updated', {
+      socketId: targetSocketId,
+      isVideoOff: locked ? true : undefined,
+      participants: getRoomParticipantsArray(room),
+    })
+
+    console.log(`[Room ${meetingId}] Host ${locked ? 'locked' : 'unlocked'} video for ${targetSocketId}`)
   })
 
   // ── MUTE ALL (Host Only) ───────────────────────────────────────────────────

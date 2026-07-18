@@ -114,10 +114,18 @@ export default function HostDashboard() {
   }
 
   const handleCopyLink = (url) => {
-    navigator.clipboard.writeText(url).then(() => {
+    if (window.fikraElectron?.clipboard?.writeText) {
+      window.fikraElectron.clipboard.writeText(url)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    })
+    } else {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      }).catch(err => {
+        console.error('Clipboard copy failed:', err)
+      })
+    }
   }
 
   const formatTime = (secs) => {

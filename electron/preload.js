@@ -43,6 +43,14 @@ contextBridge.exposeInMainWorld('fikraElectron', {
   // ── Dialog ───────────────────────────────────────────────────────────────────
   showDialog: (options) => ipcRenderer.invoke('show-dialog', options),
 
+  // ── Clipboard ───────────────────────────────────────────────────────────────
+  clipboard: {
+    writeText: (text) => {
+      const { clipboard } = require('electron')
+      clipboard.writeText(text)
+    }
+  },
+
   // ── Platform Info ────────────────────────────────────────────────────────────
   platform: process.platform,
   isElectron: true,

@@ -17,6 +17,16 @@ export function useMedia() {
   // ── Initialize camera + mic ───────────────────────────────────────────────
   const initMedia = useCallback(async (videoEnabled = true, audioEnabled = true) => {
     try {
+      if (!videoEnabled && !audioEnabled) {
+        localStreamRef.current = null
+        setLocalStream(null)
+        setHasMedia(false)
+        setIsMuted(true)
+        setIsVideoOff(true)
+        setMediaError(null)
+        return null
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: videoEnabled ? {
           width: { ideal: 1280 },
