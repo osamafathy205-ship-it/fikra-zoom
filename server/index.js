@@ -52,6 +52,7 @@ function getRoomParticipantsArray(room) {
     role: p.role,
     isMuted: p.isMuted,
     isVideoOff: p.isVideoOff,
+    isVideoLocked: p.isVideoLocked || false,
     joinedAt: p.joinedAt,
     avatar: p.avatar,
   }))

@@ -4,7 +4,7 @@
  * This is the ONLY bridge between the secure renderer and the main process.
  */
 
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, clipboard } = require('electron')
 
 // ─── Exposed API Surface ──────────────────────────────────────────────────────
 contextBridge.exposeInMainWorld('fikraElectron', {
@@ -45,10 +45,8 @@ contextBridge.exposeInMainWorld('fikraElectron', {
 
   // ── Clipboard ───────────────────────────────────────────────────────────────
   clipboard: {
-    writeText: (text) => {
-      const { clipboard } = require('electron')
-      clipboard.writeText(text)
-    }
+    writeText: (text) => clipboard.writeText(text),
+    readText: () => clipboard.readText(),
   },
 
   // ── Platform Info ────────────────────────────────────────────────────────────

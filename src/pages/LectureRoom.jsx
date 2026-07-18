@@ -85,17 +85,18 @@ export default function LectureRoom() {
   const [mutedByHost, setMutedByHost] = useState(!isHost)
   const [videoLockedByHost, setVideoLockedByHost] = useState(!isHost)
 
-  // ── Init media on mount ────────────────────────────────────────────────────
+  // ── Init media on mount (once) ────────────────────────────────────────────
   useEffect(() => {
     if (isHost) {
       initMedia(true, true)
     } else {
-      // Students join with both audio and video disabled by default (no browser prompt)
+      // Students join with audio/video off → no browser permission popup
       initMedia(false, false)
     }
-  }, [isHost])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // ── Join room via socket ────────────────────────────────────────────────────
+  // ── Join room via socket (once connected) ──────────────────────────────────
   useEffect(() => {
     if (!connected) return
     emit('join-room', {
