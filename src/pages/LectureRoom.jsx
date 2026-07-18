@@ -52,14 +52,23 @@ function RemoteVideo({ participant, stream }) {
 
   return (
     <div className={`video-tile remote ${participant.isVideoOff || !stream ? 'video-off' : ''}`}>
-      {!participant.isVideoOff && stream
-        ? <video ref={videoEl} autoPlay playsInline className="video-el" />
-        : (
-          <div className="video-avatar">
-            <span>{participant.name?.charAt(0)?.toUpperCase() || '؟'}</span>
-          </div>
-        )
-      }
+      {/* Always mount video tag if stream exists so remote audio keeps playing even when camera is disabled */}
+      {stream && (
+        <video
+          ref={videoEl}
+          autoPlay
+          playsInline
+          className="video-el"
+          style={{ display: participant.isVideoOff ? 'none' : 'block' }}
+        />
+      )}
+
+      {(participant.isVideoOff || !stream) && (
+        <div className="video-avatar">
+          <span>{participant.name?.charAt(0)?.toUpperCase() || '؟'}</span>
+        </div>
+      )}
+
       <div className="video-label">
         {participant.isMuted && <MicOff size={11} className="video-muted-icon" />}
         <span>{participant.name}</span>
