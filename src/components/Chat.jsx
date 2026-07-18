@@ -2,17 +2,9 @@ import React, { useState, useRef, useEffect } from 'react'
 import { Send, X } from 'lucide-react'
 import './Chat.css'
 
-export default function Chat({ meetingId, messages, mySocketId, userName, emit, on, dispatch, fullMode }) {
+export default function Chat({ meetingId, messages, mySocketId, userName, emit, dispatch, fullMode }) {
   const [text, setText] = useState('')
   const bottomRef = useRef(null)
-
-  // Listen for new messages
-  useEffect(() => {
-    const cleanup = on('new-message', (msg) => {
-      dispatch({ type: 'NEW_MESSAGE', message: msg })
-    })
-    return cleanup
-  }, [on, dispatch])
 
   // Auto-scroll
   useEffect(() => {
