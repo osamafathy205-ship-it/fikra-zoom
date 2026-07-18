@@ -6,6 +6,7 @@
   "author": "Fikra Academy",
   "license": "MIT",
   "scripts": {
+    "start": "node server/index.js",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:server": "node server/index.js",
     "dev:vite": "vite",
