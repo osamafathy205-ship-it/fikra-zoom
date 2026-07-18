@@ -24,14 +24,22 @@ function LocalVideo({ stream, name, isMuted, isVideoOff }) {
 
   return (
     <div className={`video-tile local ${isVideoOff ? 'video-off' : ''}`}>
-      {!isVideoOff && stream
-        ? <video ref={videoEl} autoPlay muted playsInline className="video-el" />
-        : (
-          <div className="video-avatar">
-            <span>{name?.charAt(0)?.toUpperCase() || '؟'}</span>
-          </div>
-        )
-      }
+      {/* Always mount video element so srcObject ref is stable – avoids blue screen in Electron */}
+      {stream && (
+        <video
+          ref={videoEl}
+          autoPlay
+          muted
+          playsInline
+          className="video-el"
+          style={{ display: isVideoOff ? 'none' : 'block' }}
+        />
+      )}
+      {(isVideoOff || !stream) && (
+        <div className="video-avatar">
+          <span>{name?.charAt(0)?.toUpperCase() || '؟'}</span>
+        </div>
+      )}
       <div className="video-label">
         {isMuted && <MicOff size={11} className="video-muted-icon" />}
         <span>{name} (أنت)</span>
@@ -391,11 +399,27 @@ export default function LectureRoom() {
         })
       }),
 
-      on('participant-joined', ({ participant, participants: ps }) => {
+      on('participant-joined', async ({ participant, participants: ps, needOfferTo }) => {
         setParticipants(ps)
-        // Existing participants create and manage connection with new joiner
-        if (participant && participant.socketId !== socketRef.current?.id) {
-          createPeerConnection(participant.socketId)
+        const myId = socketRef.current?.id
+
+        if (participant && participant.socketId !== myId) {
+          // Create (or get existing) peer connection with the new joiner
+          const pc = createPeerConnection(participant.socketId)
+
+          // If server asks us to proactively offer (because we are an existing peer)
+          if (needOfferTo === participant.socketId) {
+            // Small delay to let the new joiner settle before we offer
+            setTimeout(async () => {
+              try {
+                const offer = await pc.createOffer()
+                await pc.setLocalDescription(offer)
+                emit('offer', { targetSocketId: participant.socketId, offer, meetingId })
+              } catch (err) {
+                console.error('[WebRTC] Failed to create proactive offer:', err)
+              }
+            }, 300)
+          }
         }
       }),
 
@@ -562,8 +586,17 @@ export default function LectureRoom() {
     }
     
     if (!localStream) {
+      // First time unmuting – init audio-only stream and register on all peers
       const stream = await initMedia(false, true)
       if (stream) {
+        stream.getTracks().forEach(track => {
+          peersRef.current.forEach((pc) => {
+            const alreadyExists = pc.getSenders().find(s => s.track?.kind === track.kind)
+            if (!alreadyExists) {
+              pc.addTrack(track, stream)
+            }
+          })
+        })
         emit('toggle-mute', { meetingId, isMuted: false })
         dispatch({ type: 'SET_MUTED', muted: false })
       }
@@ -581,11 +614,21 @@ export default function LectureRoom() {
     }
 
     if (!localStream) {
-      const stream = await initMedia(true, isMuted)
+      // First time activating camera – init media and add tracks to all existing peers
+      const stream = await initMedia(true, !isMuted)
       if (stream) {
+        stream.getTracks().forEach(track => {
+          peersRef.current.forEach((pc) => {
+            const alreadyExists = pc.getSenders().find(s => s.track?.kind === track.kind)
+            if (!alreadyExists) {
+              pc.addTrack(track, stream)
+            }
+          })
+        })
         emit('toggle-video', { meetingId, isVideoOff: false })
       }
     } else {
+      // Stream exists – just enable/disable the video track (no remount, no blue screen)
       const newOff = toggleVideo()
       emit('toggle-video', { meetingId, isVideoOff: newOff })
     }

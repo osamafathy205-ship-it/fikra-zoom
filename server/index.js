@@ -123,10 +123,16 @@ io.on('connection', (socket) => {
       myInfo: participant,
     })
 
-    // Notify everyone else
-    socket.to(meetingId).emit('participant-joined', {
-      participant,
-      participants: getRoomParticipantsArray(room),
+    // Notify everyone else and ask existing peers to initiate WebRTC offers toward the new joiner
+    room.participants.forEach((p, sid) => {
+      if (sid !== socket.id) {
+        // Tell each existing participant to send an offer to the new joiner
+        io.to(sid).emit('participant-joined', {
+          participant,
+          participants: getRoomParticipantsArray(room),
+          needOfferTo: socket.id,
+        })
+      }
     })
 
     console.log(`[Room ${meetingId}] ${name} joined as ${role}. Total: ${room.participants.size}`)
