@@ -10,10 +10,8 @@ import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff,
   MessageSquare, Users, PhoneOff, Hand, Volume2,
 } from 'lucide-react'
-import { Track } from 'livekit-client'
 
 // ─── Local Video Preview ───────────────────────────────────────────────────────
-// Uses LiveKit track.attach() to bind the video element — avoids blue screens.
 function LocalVideo({ videoTrack, name, isVideoEnabled, isAudioEnabled }) {
   const videoEl = useRef(null)
 
@@ -43,7 +41,6 @@ function LocalVideo({ videoTrack, name, isVideoEnabled, isAudioEnabled }) {
 }
 
 // ─── Remote Video Tile ─────────────────────────────────────────────────────────
-// Accepts LiveKit Track objects directly — no MediaStream juggling needed.
 function RemoteVideo({ participant, videoTrack, audioTrack }) {
   const videoEl = useRef(null)
   const audioEl = useRef(null)
@@ -70,7 +67,7 @@ function RemoteVideo({ participant, videoTrack, audioTrack }) {
       {!isVideoOff && (
         <video ref={videoEl} autoPlay playsInline className="video-el" />
       )}
-      {/* Hidden audio element always present to play remote audio */}
+      {/* Hidden audio element to play remote audio */}
       <audio ref={audioEl} autoPlay style={{ display: 'none' }} />
       {isVideoOff && (
         <div className="video-avatar">
@@ -125,16 +122,16 @@ export default function LectureRoom() {
   const { state, dispatch } = useApp()
   const { socketRef, connected, emit, on } = useSocket()
 
-  // LiveKit hook — replaces all custom WebRTC signaling
+  // LiveKit hook
   const {
     lkConnected,
     localVideoTrack, localAudioTrack, localScreenTrack,
-    isVideoEnabled, isAudioEnabled, isSharingScreen,
+    isVideoEnabled, isAudioEnabled, isSharingScreen, isAudioPlaybackBlocked,
     remoteTracks,
     connect: lkConnect, disconnect: lkDisconnect,
     toggleCamera, toggleMic,
     forceMute, forceVideoOff,
-    startScreenShare, stopScreenShare,
+    startScreenShare, stopScreenShare, startAudioPlayback,
   } = useLiveKit()
 
   const [handRaised,       setHandRaised]       = useState(false)
@@ -230,7 +227,6 @@ export default function LectureRoom() {
       try {
         const room = await lkConnect(url, token)
         if (room && isHost) {
-          // Host publishes camera & mic by default
           await room.localParticipant.setCameraEnabled(true)
           await room.localParticipant.setMicrophoneEnabled(true)
         }
@@ -356,6 +352,19 @@ export default function LectureRoom() {
     emit('toggle-video', { meetingId, isVideoOff: newOff })
   }
 
+  const selectScreenSource = async (sourceId) => {
+    setShowScreenModal(false)
+    try {
+      await startScreenShare(sourceId)
+      emit('screen-share-started', { meetingId, sharerName: state.userName, sharerId: state.mySocketId })
+      setScreenSharerName(state.userName)
+      setScreenSharerId(state.mySocketId)
+      setScreenShareActive(true)
+    } catch (err) {
+      console.error('[ScreenShare] Electron screen share initiation failed:', err)
+    }
+  }
+
   const handleScreenShare = async () => {
     if (isSharingScreen) {
       await stopScreenShare()
@@ -364,14 +373,24 @@ export default function LectureRoom() {
       setScreenSharerName(null)
       setScreenSharerId(null)
     } else {
-      try {
-        await startScreenShare()
-        emit('screen-share-started', { meetingId, sharerName: state.userName, sharerId: state.mySocketId })
-        setScreenSharerName(state.userName)
-        setScreenSharerId(state.mySocketId)
-        setScreenShareActive(true)
-      } catch (err) {
-        console.error('[ScreenShare]', err)
+      if (window.fikraElectron) {
+        try {
+          const sources = await window.fikraElectron.screen.getSources()
+          setScreenSources(sources)
+          setShowScreenModal(true)
+        } catch (err) {
+          console.error('[ScreenShare] Failed to fetch sources in Electron:', err)
+        }
+      } else {
+        try {
+          await startScreenShare()
+          emit('screen-share-started', { meetingId, sharerName: state.userName, sharerId: state.mySocketId })
+          setScreenSharerName(state.userName)
+          setScreenSharerId(state.mySocketId)
+          setScreenShareActive(true)
+        } catch (err) {
+          console.error('[ScreenShare] Browser screen share initiation failed:', err)
+        }
       }
     }
   }
@@ -404,6 +423,31 @@ export default function LectureRoom() {
 
   return (
     <div className="lr-root">
+      {/* Autoplay Audio Block Banner Alert */}
+      {isAudioPlaybackBlocked && (
+        <div
+          className="audio-block-banner"
+          onClick={startAudioPlayback}
+          style={{
+            background: 'var(--gold-500)',
+            color: 'var(--navy-950)',
+            textAlign: 'center',
+            padding: '12px',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            zIndex: 100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            animation: 'pulse 2s infinite',
+          }}
+        >
+          🔊 انقر هنا لتفعيل صوت المحاضرة (متصفحك يحجب تشغيل الصوت تلقائياً)
+        </div>
+      )}
+
       {/* ── Header ────────────────────────────────────────────────── */}
       <header className="lr-header">
         <div className="lr-header-brand">
@@ -670,6 +714,34 @@ export default function LectureRoom() {
                 إلغاء
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Screen Source Picker (Electron) ──────────────────────── */}
+      {showScreenModal && (
+        <div className="lr-overlay">
+          <div className="lr-confirm-card glass-card" style={{ maxWidth: '600px', width: '90%' }}>
+            <h3 style={{ marginBottom: '16px' }}>اختر شاشة للمشاركة</h3>
+            <div className="screen-sources-grid">
+              {screenSources.map(src => (
+                <button
+                  key={src.id}
+                  className="screen-source-btn"
+                  onClick={() => selectScreenSource(src.id)}
+                >
+                  <img src={src.thumbnail} alt={src.name} className="screen-source-thumb" />
+                  <span className="screen-source-name">{src.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn btn-ghost"
+              style={{ marginTop: '16px' }}
+              onClick={() => setShowScreenModal(false)}
+            >
+              إلغاء
+            </button>
           </div>
         </div>
       )}

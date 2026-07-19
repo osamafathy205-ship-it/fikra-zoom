@@ -2,8 +2,7 @@
  * useLiveKit — Fikra Academy
  * Manages the full LiveKit Room lifecycle:
  * connect, local tracks (camera / mic / screen), remote track subscriptions.
- * All custom WebRTC signaling (offers, answers, ICE candidates) is handled
- * transparently by the LiveKit SDK — zero glare, zero race conditions.
+ * Supports custom Electron screen share sources and handles browser autoplay blocks.
  */
 import { useRef, useState, useCallback, useEffect } from 'react'
 import {
@@ -15,15 +14,17 @@ import {
 export function useLiveKit() {
   const roomRef  = useRef(null)
 
-  const [lkConnected,       setLkConnected]       = useState(false)
-  const [localVideoTrack,   setLocalVideoTrack]   = useState(null)
-  const [localAudioTrack,   setLocalAudioTrack]   = useState(null)
-  const [localScreenTrack,  setLocalScreenTrack]  = useState(null)
-  const [isVideoEnabled,    setIsVideoEnabled]     = useState(false)
-  const [isAudioEnabled,    setIsAudioEnabled]     = useState(false)
-  const [isSharingScreen,   setIsSharingScreen]   = useState(false)
-  // Map<identity (= socketId), { video, audio, screen } LiveKit Track objects>
-  const [remoteTracks,      setRemoteTracks]      = useState(new Map())
+  const [lkConnected,            setLkConnected]            = useState(false)
+  const [localVideoTrack,        setLocalVideoTrack]        = useState(null)
+  const [localAudioTrack,        setLocalAudioTrack]        = useState(null)
+  const [localScreenTrack,       setLocalScreenTrack]       = useState(null)
+  const [isVideoEnabled,         setIsVideoEnabled]         = useState(false)
+  const [isAudioEnabled,         setIsAudioEnabled]         = useState(false)
+  const [isSharingScreen,        setIsSharingScreen]        = useState(false)
+  const [isAudioPlaybackBlocked, setIsAudioPlaybackBlocked] = useState(false)
+
+  // Map<identity, { video, audio, screen, isMuted, isVideoOff }>
+  const [remoteTracks,           setRemoteTracks]           = useState(new Map())
 
   // ─── Rebuild the remoteTracks map from current room state ─────────────────
   const syncRemoteTracks = useCallback(() => {
@@ -65,6 +66,11 @@ export function useLiveKit() {
       .on(RoomEvent.ParticipantConnected,   syncRemoteTracks)
       .on(RoomEvent.ParticipantDisconnected, syncRemoteTracks)
 
+    // ── Autoplay Audio Blocking events ───────────────────────────────────────
+    room.on(RoomEvent.AudioPlaybackStatusChanged, (playable) => {
+      setIsAudioPlaybackBlocked(!playable)
+    })
+
     // ── Local track events ───────────────────────────────────────────────────
     room.on(RoomEvent.LocalTrackPublished, (pub) => {
       const t = pub.track
@@ -84,10 +90,17 @@ export function useLiveKit() {
       setLocalAudioTrack(null)
       setLocalScreenTrack(null)
       setRemoteTracks(new Map())
+      setIsAudioPlaybackBlocked(false)
     })
 
     await room.connect(url, token)
     setLkConnected(true)
+
+    // Trigger autoplay detection immediately after connection
+    if (!room.canPlayAudio) {
+      setIsAudioPlaybackBlocked(true)
+    }
+
     return room
   }, [syncRemoteTracks])
 
@@ -136,8 +149,22 @@ export function useLiveKit() {
     setIsVideoEnabled(!off)
   }, [])
 
-  const startScreenShare = useCallback(async () => {
-    await roomRef.current?.localParticipant?.setScreenShareEnabled(true)
+  // startScreenShare with sourceId support for Electron Desktop screen capture
+  const startScreenShare = useCallback(async (sourceId) => {
+    if (!roomRef.current) return
+    if (sourceId) {
+      await roomRef.current.localParticipant.setScreenShareEnabled(true, {
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+          }
+        }
+      })
+    } else {
+      await roomRef.current.localParticipant.setScreenShareEnabled(true)
+    }
     setIsSharingScreen(true)
   }, [])
 
@@ -145,6 +172,12 @@ export function useLiveKit() {
     await roomRef.current?.localParticipant?.setScreenShareEnabled(false)
     setIsSharingScreen(false)
     setLocalScreenTrack(null)
+  }, [])
+
+  const startAudioPlayback = useCallback(async () => {
+    if (!roomRef.current) return
+    await roomRef.current.startAudio()
+    setIsAudioPlaybackBlocked(false)
   }, [])
 
   // ─── Disconnect ────────────────────────────────────────────────────────────
@@ -157,6 +190,7 @@ export function useLiveKit() {
     setLocalAudioTrack(null)
     setLocalScreenTrack(null)
     setRemoteTracks(new Map())
+    setIsAudioPlaybackBlocked(false)
   }, [])
 
   // Cleanup on unmount
@@ -172,6 +206,7 @@ export function useLiveKit() {
     isVideoEnabled,
     isAudioEnabled,
     isSharingScreen,
+    isAudioPlaybackBlocked,
     remoteTracks,
     connect,
     disconnect,
@@ -185,5 +220,6 @@ export function useLiveKit() {
     forceVideoOff,
     startScreenShare,
     stopScreenShare,
+    startAudioPlayback,
   }
 }
